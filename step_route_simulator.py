@@ -198,7 +198,7 @@ ROUTE_BUILDER_HTML = """<!DOCTYPE html>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  var map = L.map('map').setView([31.5, 34.85], 8);  // default view: Israel
+  var map = L.map('map').setView([32.2761, 34.9157], 14);  // default view: Kadima, Israel
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors'
