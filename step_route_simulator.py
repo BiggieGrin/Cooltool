@@ -710,6 +710,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                       help="Open an interactive Leaflet map to draw the route.")
     src.add_argument("--draw-map-port", type=int, default=8934,
                       help="Local port for the route-builder web page.")
+    src.add_argument("--save-route", metavar="FILE",
+                      help="Write the resolved waypoints to a GPX file for reuse "
+                           "(handy with --draw-map/--waypoints, whose input isn't "
+                           "saved anywhere otherwise). Written before simulation runs.")
 
     motion = p.add_argument_group("Motion / cadence tuning")
     motion.add_argument("--stride", type=float, default=DEFAULT_STRIDE_M,
@@ -801,6 +805,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         sys.exit(2)
 
     waypoints, speed_kmh, stride_m = resolve_waypoints(args)
+
+    if args.save_route:
+        write_gpx(args.save_route, waypoints)
+        print(f"[save-route] Wrote {len(waypoints)} waypoints to {args.save_route}")
 
     fixes, stats = simulate_walk(
         waypoints,

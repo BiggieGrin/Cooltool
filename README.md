@@ -45,15 +45,18 @@ To drive a **real device**, you need a small companion app that owns the
 mock-location provider, because ADB itself cannot write to a real device's
 `LocationManager`:
 
-1. Developer options → **Select mock location app** → choose your companion
-   app (e.g. a debug build of your own app that calls
-   `LocationManager.setTestProviderLocation(...)`, or a third-party mock
-   location tool).
-2. Have that app register a `BroadcastReceiver` for the intent action passed
-   via `--broadcast-action` (default `com.stepsim.MOCK_LOCATION`), reading
-   the `lat` / `lng` float extras and forwarding them to the mock location
-   provider.
-3. Run this script with `--live --method broadcast`.
+1. Build and install [`android_companion_app/`](android_companion_app/) — a
+   minimal app included in this repo that's already wired up for this
+   script's broadcast protocol. See that folder's README for full setup.
+2. Developer options → **Select mock location app** → choose **StepSim
+   Companion** (or your own companion app, if you're rolling your own — it
+   needs a `BroadcastReceiver` for the intent action passed via
+   `--broadcast-action`, default `com.stepsim.MOCK_LOCATION`, reading the
+   `lat` / `lng` float extras and forwarding them to
+   `LocationManager.setTestProviderLocation(...)`).
+3. Start the service in the companion app.
+4. Run this script with `--live --method broadcast --receiver-package
+   com.stepsim.companion`.
 
 ### Health Connect
 `--export-health` only **generates a JSON file** shaped like Health Connect's
@@ -81,6 +84,11 @@ Pick exactly one:
 | `--gpx <file>` | Parse a GPX file (`<trkpt>`, `<rtept>`, or `<wpt>` elements — works with exports from Google Maps, Strava, GPX Studio, etc). |
 | `--waypoints "lat1,lng1 \| lat2,lng2 \| ..."` | Inline pipe-separated waypoints. |
 | `--draw-map` | Opens `route_builder.html` (embedded, served locally) with an interactive Leaflet.js map. Click to add waypoints, adjust speed/stride sliders, then click **Export route to CLI** — the page POSTs the route back to the running script. |
+
+`--save-route <file.gpx>` writes whatever route was resolved (drawn, inline,
+or re-parsed GPX) out to a GPX file — mainly useful with `--draw-map` or
+`--waypoints`, since otherwise a drawn/inline route only exists for that one
+run and can't be reused without redrawing/retyping it.
 
 ## 4. Motion tuning
 
