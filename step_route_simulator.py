@@ -198,7 +198,7 @@ ROUTE_BUILDER_HTML = """<!DOCTYPE html>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script>
-  var map = L.map('map').setView([37.7749, -122.4194], 15);
+  var map = L.map('map').setView([31.5, 34.85], 8);  // default view: Israel
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19,
     attribution: '&copy; OpenStreetMap contributors'
