@@ -59,13 +59,24 @@ mock-location provider, because ADB itself cannot write to a real device's
    com.stepsim.companion`.
 
 ### Health Connect
-`--export-health` only **generates a JSON file** shaped like Health Connect's
+`--export-health` **generates a JSON file** shaped like Health Connect's
 `StepsRecord`/`DistanceRecord` insert payloads — it does not write to Health
-Connect directly (there is no ADB bridge for that). To actually import it,
-write a small companion app using the
+Connect itself (there is no ADB bridge for that).
+
+To actually get steps into Health Connect, use `--write-health` alongside
+`--live --method broadcast`: as the route streams, the script buckets steps
+into `--bucket-seconds`-wide intervals (same width `--export-health` uses)
+and broadcasts each bucket to the companion app, which calls
+`HealthConnectClient.insertRecords(...)` for you in real time. See
+[`android_companion_app/`](android_companion_app/)'s README for the one-time
+"Grant Health Connect access" step this requires. This only works on a real
+device via the companion app — there's no equivalent for the
+`--method emulator` path.
+
+If you'd rather write your own importer instead (e.g. to batch-import a
+previously `--export-health`'d file), build a small companion app using the
 [Health Connect Jetpack client](https://developer.android.com/health-and-fitness/guides/health-connect)
-that reads the JSON and calls `HealthConnectClient.insertRecords(...)`, or
-adapt your own app's existing Health Connect write path to consume the file.
+that reads the JSON and calls `HealthConnectClient.insertRecords(...)`.
 
 ## 2. Installation
 
@@ -131,6 +142,16 @@ python3 step_route_simulator.py --gpx morning_walk.gpx --live \
   --method broadcast --device <adb-serial> \
   --broadcast-action com.myapp.MOCK_LOCATION --receiver-package com.myapp.debug
 ```
+
+### Stream live location *and* write steps into Health Connect
+```bash
+python3 step_route_simulator.py --gpx morning_walk.gpx --live \
+  --method broadcast --device <adb-serial> --receiver-package com.stepsim.companion \
+  --write-health
+```
+Requires the [`android_companion_app/`](android_companion_app/) with Health
+Connect access already granted (see its README) — steps and distance are
+inserted a bucket at a time as the route plays out.
 
 ### Speed up playback
 ```bash

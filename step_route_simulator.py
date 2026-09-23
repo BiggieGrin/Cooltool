@@ -554,31 +554,84 @@ def send_fix_broadcast(lat: float, lon: float, device: Optional[str],
     subprocess.run(cmd, check=False, capture_output=True, text=True)
 
 
+def send_health_broadcast(steps: int, start_ms: int, end_ms: int, distance_m: float,
+                           device: Optional[str], action: str,
+                           receiver_package: Optional[str]) -> None:
+    """Broadcast a step/distance bucket for the companion app to insert into Health
+    Connect via HealthConnectClient.insertRecords(...).
+
+    Buckets are stamped with real wall-clock timestamps (not simulated ones) since
+    they're inserted as they're sent, during a live run.
+    """
+    cmd = adb_base_cmd(device) + [
+        "shell", "am", "broadcast",
+        "-a", action,
+        "--ei", "steps", str(steps),
+        "--el", "start_millis", str(start_ms),
+        "--el", "end_millis", str(end_ms),
+        "--ef", "distance_m", f"{distance_m:.3f}",
+    ]
+    if receiver_package:
+        cmd += ["-p", receiver_package]
+    subprocess.run(cmd, check=False, capture_output=True, text=True)
+
+
 def stream_live(fixes: List[Fix], method: str, device: Optional[str],
                  broadcast_action: str, receiver_package: Optional[str],
-                 speed_multiplier: float = 1.0) -> None:
+                 speed_multiplier: float = 1.0,
+                 write_health: bool = False,
+                 health_broadcast_action: str = "com.stepsim.STEPS",
+                 bucket_seconds: float = 30.0) -> None:
     check_adb_available()
     print(f"[live] Streaming {len(fixes)} fixes via '{method}' "
           f"(speed x{speed_multiplier})... Ctrl+C to stop.")
     prev_t = 0.0
+    last_step_index = 0
+    last_cumulative_m = 0.0
+
+    bucket_start_wall_ms = int(time.time() * 1000)
+    bucket_start_steps = 0
+    bucket_start_dist = 0.0
+
+    def flush_health_bucket() -> None:
+        nonlocal bucket_start_wall_ms, bucket_start_steps, bucket_start_dist
+        end_wall_ms = int(time.time() * 1000)
+        steps = last_step_index - bucket_start_steps
+        if steps > 0 and end_wall_ms > bucket_start_wall_ms:
+            send_health_broadcast(steps, bucket_start_wall_ms, end_wall_ms,
+                                   last_cumulative_m - bucket_start_dist,
+                                   device, health_broadcast_action, receiver_package)
+        bucket_start_wall_ms = end_wall_ms
+        bucket_start_steps = last_step_index
+        bucket_start_dist = last_cumulative_m
+
     try:
         for i, fx in enumerate(fixes):
             wait = max(0.0, (fx.t_offset_s - prev_t) / max(speed_multiplier, 1e-6))
             if wait > 0:
                 time.sleep(wait)
             prev_t = fx.t_offset_s
+            last_step_index = fx.step_index
+            last_cumulative_m = fx.cumulative_m
 
             if method == "emulator":
                 send_fix_emulator(fx.lat, fx.lon, device)
             else:
                 send_fix_broadcast(fx.lat, fx.lon, device, broadcast_action, receiver_package)
 
+            if write_health and (int(time.time() * 1000) - bucket_start_wall_ms) / 1000.0 >= bucket_seconds:
+                flush_health_bucket()
+
             tag = "PAUSE" if fx.is_pause else "STEP "
             print(f"\r[live] {tag} #{i+1}/{len(fixes)}  "
                   f"lat={fx.lat:.6f} lon={fx.lon:.6f}  "
                   f"steps={fx.step_index}  t={fx.t_offset_s:6.1f}s", end="", flush=True)
+        if write_health:
+            flush_health_bucket()
         print("\n[live] Route complete.")
     except KeyboardInterrupt:
+        if write_health:
+            flush_health_bucket()
         print("\n[live] Interrupted by user.")
 
 
@@ -755,11 +808,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     live.add_argument("--speed-multiplier", type=float, default=1.0,
                        help="Playback speed multiplier (2.0 = twice as fast as real time).")
 
-    health = p.add_argument_group("--export-health options")
+    health = p.add_argument_group("--export-health / --write-health options")
     health.add_argument("--start-time", default=None,
-                         help="ISO-8601 start timestamp (default: now, UTC).")
+                         help="ISO-8601 start timestamp for --export-health (default: now, UTC).")
     health.add_argument("--bucket-seconds", type=float, default=30.0,
                          help="Width of each StepsRecord/DistanceRecord interval.")
+    health.add_argument("--write-health", action="store_true",
+                         help="Also write live StepsRecord/DistanceRecord buckets into "
+                              "Health Connect via the companion app, as the route streams "
+                              "(requires --live --method broadcast).")
+    health.add_argument("--health-broadcast-action", default="com.stepsim.STEPS",
+                         help="Intent action used for --write-health buckets.")
 
     return p
 
@@ -804,6 +863,10 @@ def main(argv: Optional[List[str]] = None) -> None:
               file=sys.stderr)
         sys.exit(2)
 
+    if args.write_health and not (args.live and args.method == "broadcast"):
+        print("ERROR: --write-health requires --live --method broadcast.", file=sys.stderr)
+        sys.exit(2)
+
     waypoints, speed_kmh, stride_m = resolve_waypoints(args)
 
     if args.save_route:
@@ -837,7 +900,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         stream_live(fixes, method=args.method, device=args.device,
                     broadcast_action=args.broadcast_action,
                     receiver_package=args.receiver_package,
-                    speed_multiplier=args.speed_multiplier)
+                    speed_multiplier=args.speed_multiplier,
+                    write_health=args.write_health,
+                    health_broadcast_action=args.health_broadcast_action,
+                    bucket_seconds=args.bucket_seconds)
 
 
 if __name__ == "__main__":

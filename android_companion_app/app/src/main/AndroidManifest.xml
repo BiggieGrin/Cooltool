@@ -9,6 +9,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- OpenStreetMap tiles for the in-app route builder. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- Lets step_route_simulator.py's write-health buckets land in Health
+         Connect via HealthConnectClient.insertRecords(...). -->
+    <uses-permission android:name="android.permission.health.WRITE_STEPS" />
+    <uses-permission android:name="android.permission.health.WRITE_DISTANCE" />
+
+    <queries>
+        <package android:name="com.google.android.apps.healthdata" />
+    </queries>
 
     <application
         android:allowBackup="false"
@@ -18,12 +29,18 @@
 
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".RouteBuilderActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false" />
 
         <!-- Foreground service so the mock-location provider + broadcast
              receiver stay alive while step_route_simulator.py streams fixes,
@@ -32,6 +49,29 @@
             android:name=".MockLocationService"
             android:exported="false"
             android:foregroundServiceType="location" />
+
+        <!-- Mandatory for Health Connect: without a rationale activity reachable via
+             one of these two intent-filters, Health Connect's own permission-request
+             screen refuses to open (it self-finishes with everything denied, and the
+             app never appears in Health Connect's "app permissions" list at all). -->
+        <activity
+            android:name=".PermissionsRationaleActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.health.ACTION_SHOW_PERMISSIONS_RATIONALE" />
+            </intent-filter>
+        </activity>
+
+        <activity-alias
+            android:name=".ViewPermissionUsageActivity"
+            android:exported="true"
+            android:targetActivity=".PermissionsRationaleActivity"
+            android:permission="android.permission.START_VIEW_PERMISSION_USAGE">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW_PERMISSION_USAGE" />
+                <category android:name="android.intent.category.HEALTH_PERMISSIONS" />
+            </intent-filter>
+        </activity-alias>
 
     </application>
 </manifest>

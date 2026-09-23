@@ -1,7 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:fillViewport="true">
+
+<LinearLayout
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
     android:orientation="vertical"
     android:padding="24dp"
     android:gravity="top">
@@ -17,9 +22,9 @@
     <TextView
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="1. Tap \'Open Developer options\' and select this app as the mock location app.\n2. Tap \'Start mock location service\'.\n3. Run step_route_simulator.py with --live --method broadcast."
+        android:text="One-time setup: select this app as the mock location app, and (optionally) grant Health Connect access. Then pick a route and tap Start walking."
         android:textSize="14sp"
-        android:paddingBottom="24dp" />
+        android:paddingBottom="16dp" />
 
     <Button
         android:id="@+id/devOptionsButton"
@@ -28,18 +33,93 @@
         android:text="Open Developer options" />
 
     <Button
-        android:id="@+id/startButton"
+        android:id="@+id/healthConnectButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Start mock location service" />
+        android:layout_marginTop="8dp"
+        android:text="Grant Health Connect access" />
+
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Route"
+        android:textSize="16sp"
+        android:textStyle="bold" />
+
+    <Button
+        android:id="@+id/drawRouteButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Draw route on map" />
+
+    <Button
+        android:id="@+id/importGpxButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Import GPX file" />
+
+    <TextView
+        android:id="@+id/routeSummary"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textSize="14sp"
+        android:text="No route selected." />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:orientation="horizontal">
+
+        <EditText
+            android:id="@+id/speedInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Speed km/h"
+            android:inputType="numberDecimal"
+            android:text="4.5" />
+
+        <EditText
+            android:id="@+id/strideInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Stride m"
+            android:inputType="numberDecimal"
+            android:text="0.78" />
+    </LinearLayout>
+
+    <CheckBox
+        android:id="@+id/writeHealthCheck"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Write steps to Health Connect" />
+
+    <Button
+        android:id="@+id/startWalkButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:text="Start walking" />
 
     <Button
         android:id="@+id/stopButton"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="12dp"
-        android:text="Stop service" />
+        android:layout_marginTop="8dp"
+        android:text="Stop" />
+
+    <Button
+        android:id="@+id/startButton"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="24dp"
+        android:text="Advanced: start laptop-broadcast listener" />
 
     <TextView
         android:id="@+id/statusText"
@@ -51,3 +131,4 @@
         android:text="Idle." />
 
 </LinearLayout>
+</ScrollView>

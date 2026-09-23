@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Route Builder</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+      crossorigin="" />
+<style>
+  html, body { margin: 0; height: 100%; font-family: sans-serif; }
+  #map { position: absolute; top: 0; bottom: 96px; left: 0; right: 0; }
+  #bar { position: absolute; bottom: 0; left: 0; right: 0; height: 96px; box-sizing: border-box;
+         padding: 8px 12px; background: #1e1e24; color: #eee; }
+  #stats { font-size: 14px; margin-bottom: 8px; }
+  #status { color: #f59e0b; }
+  .row { display: flex; gap: 8px; }
+  button { flex: 1; padding: 10px 0; border: none; border-radius: 6px; font-weight: bold;
+           background: #444; color: #eee; font-size: 14px; }
+  button.primary { background: #38bdf8; color: #06202b; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+<div id="bar">
+  <div id="stats">Tap the map to add waypoints. <span id="status"></span></div>
+  <div class="row">
+    <button id="undoBtn">Undo</button>
+    <button id="clearBtn">Clear</button>
+    <button id="doneBtn" class="primary">Use route</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+<script>
+  var map = L.map('map').setView([32.2761, 34.9157], 14);  // default view: Kadima, Israel
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+
+  var points = [];
+  var markers = [];
+  var line = L.polyline([], {color: '#38bdf8', weight: 4}).addTo(map);
+
+  function haversine(a, b) {
+    var R = 6371000;
+    var dLat = (b[0]-a[0]) * Math.PI/180;
+    var dLon = (b[1]-a[1]) * Math.PI/180;
+    var lat1 = a[0] * Math.PI/180, lat2 = b[0] * Math.PI/180;
+    var h = Math.sin(dLat/2)*Math.sin(dLat/2) +
+            Math.cos(lat1)*Math.cos(lat2)*Math.sin(dLon/2)*Math.sin(dLon/2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function refreshStats() {
+    var dist = 0;
+    for (var i = 1; i < points.length; i++) dist += haversine(points[i-1], points[i]);
+    document.getElementById('stats').firstChild.textContent =
+      points.length + ' waypoints, ' + (dist/1000).toFixed(2) + ' km. ';
+    document.getElementById('status').textContent = '';
+  }
+
+  map.on('click', function(e) {
+    var pt = [e.latlng.lat, e.latlng.lng];
+    points.push(pt);
+    markers.push(L.circleMarker(pt, {radius: 5, color: '#f59e0b'}).addTo(map));
+    line.setLatLngs(points);
+    refreshStats();
+  });
+
+  document.getElementById('undoBtn').addEventListener('click', function() {
+    points.pop();
+    var m = markers.pop();
+    if (m) map.removeLayer(m);
+    line.setLatLngs(points);
+    refreshStats();
+  });
+
+  document.getElementById('clearBtn').addEventListener('click', function() {
+    points = [];
+    markers.forEach(function(m) { map.removeLayer(m); });
+    markers = [];
+    line.setLatLngs(points);
+    refreshStats();
+  });
+
+  document.getElementById('doneBtn').addEventListener('click', function() {
+    if (points.length < 2) {
+      document.getElementById('status').textContent = 'Add at least 2 waypoints.';
+      return;
+    }
+    Android.sendRoute(JSON.stringify(points));
+  });
+</script>
+</body>
+</html>
