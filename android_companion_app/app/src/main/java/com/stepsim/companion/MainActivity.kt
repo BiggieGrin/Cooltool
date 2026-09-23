@@ -10,6 +10,8 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.text.Editable
+import android.text.TextWatcher
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -22,6 +24,7 @@ import androidx.health.connect.client.PermissionController
 import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.StepsRecord
+import kotlin.random.Random
 
 class MainActivity : AppCompatActivity() {
 
@@ -47,11 +50,14 @@ class MainActivity : AppCompatActivity() {
             val lng = intent.getDoubleExtra(MockLocationService.EXTRA_LNG, 0.0)
             val count = intent.getIntExtra(MockLocationService.EXTRA_COUNT, 0)
             val steps = intent.getIntExtra(MockLocationService.EXTRA_STEPS, -1)
+            val totalSteps = intent.getIntExtra(MockLocationService.EXTRA_TOTAL_STEPS, -1)
             val done = intent.getBooleanExtra(MockLocationService.EXTRA_ROUTE_DONE, false)
+            val health = intent.getStringExtra(MockLocationService.EXTRA_HEALTH_STATUS).orEmpty()
             statusText.text = buildString {
                 append(if (done) "Route complete." else "Service running.")
                 append("\n\nFix #$count\nlat = $lat\nlng = $lng")
-                if (steps >= 0) append("\nsteps = $steps")
+                if (steps >= 0) append("\nsteps = $steps/$totalSteps")
+                if (health.isNotEmpty()) append("\n$health")
             }
         }
     }
@@ -59,6 +65,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var routeSummary: TextView
     private var routeLats: DoubleArray? = null
     private var routeLons: DoubleArray? = null
+    private var routeLabel = "Route"
+    // Fixed per route so the total shown here is exactly what the service later walks.
+    private var routeSeed = 0L
 
     private val drawRoute =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -87,18 +96,25 @@ class MainActivity : AppCompatActivity() {
     private fun setRoute(lats: DoubleArray, lons: DoubleArray, label: String) {
         routeLats = lats
         routeLons = lons
-        updateRouteSummary(label)
+        routeSeed = Random.nextLong()
+        routeLabel = label
+        updateRouteSummary()
     }
 
-    private fun updateRouteSummary(label: String = "Route") {
+    private fun updateRouteSummary() {
         val lats = routeLats ?: return
         val lons = routeLons ?: return
         val km = Simulator.routeDistanceM(lats.indices.map { LatLon(lats[it], lons[it]) }) / 1000.0
-        val speed = findViewById<EditText>(R.id.speedInput).text.toString().toDoubleOrNull() ?: 4.5
+        val speedMin = findViewById<EditText>(R.id.speedMinInput).text.toString().toDoubleOrNull() ?: 3.5
+        val speedMax = findViewById<EditText>(R.id.speedMaxInput).text.toString().toDoubleOrNull() ?: 5.5
         val stride = findViewById<EditText>(R.id.strideInput).text.toString().toDoubleOrNull() ?: 0.78
-        val minutes = if (speed > 0) km / speed * 60 else 0.0
-        routeSummary.text = "%s: %d points, %.2f km, ~%d steps, ~%d min".format(
-            label, lats.size, km, (km * 1000 / stride).toInt(), minutes.toInt()
+        if (speedMin <= 0 || speedMax <= 0 || stride <= 0) return
+        val route = lats.indices.map { LatLon(lats[it], lons[it]) }
+        val (_, stats) = Simulator.simulateWalk(
+            route, SimParams(strideM = stride, speedMinKmh = speedMin, speedMaxKmh = speedMax), routeSeed
+        )
+        routeSummary.text = "%s: %d points, %.2f km, %d steps, ~%d min".format(
+            routeLabel, lats.size, km, stats.totalSteps, (stats.totalDurationS / 60).toInt()
         )
     }
 
@@ -145,7 +161,23 @@ class MainActivity : AppCompatActivity() {
                 "mock location app under Developer options."
         }
 
+        // Default on, and remembered, so steps aren't silently skipped after a relaunch.
+        val prefs = getSharedPreferences("stepsim", Context.MODE_PRIVATE)
+        val writeHealthCheck = findViewById<CheckBox>(R.id.writeHealthCheck)
+        writeHealthCheck.isChecked = prefs.getBoolean("write_health", true)
+        writeHealthCheck.setOnCheckedChangeListener { _, checked ->
+            prefs.edit().putBoolean("write_health", checked).apply()
+        }
+
         routeSummary = findViewById(R.id.routeSummary)
+        val refreshSummary = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable?) = updateRouteSummary()
+        }
+        findViewById<EditText>(R.id.speedMinInput).addTextChangedListener(refreshSummary)
+        findViewById<EditText>(R.id.speedMaxInput).addTextChangedListener(refreshSummary)
+        findViewById<EditText>(R.id.strideInput).addTextChangedListener(refreshSummary)
         findViewById<Button>(R.id.drawRouteButton).setOnClickListener {
             drawRoute.launch(Intent(this, RouteBuilderActivity::class.java))
         }
@@ -165,10 +197,13 @@ class MainActivity : AppCompatActivity() {
                 statusText.text = "Grant the location permission in the dialog, then tap Start walking again."
                 return@setOnClickListener
             }
-            val speed = findViewById<EditText>(R.id.speedInput).text.toString().toDoubleOrNull()
+            val speedMin = findViewById<EditText>(R.id.speedMinInput).text.toString().toDoubleOrNull()
+            val speedMax = findViewById<EditText>(R.id.speedMaxInput).text.toString().toDoubleOrNull()
             val stride = findViewById<EditText>(R.id.strideInput).text.toString().toDoubleOrNull()
-            if (speed == null || speed <= 0 || stride == null || stride <= 0) {
-                statusText.text = "Enter a positive speed and stride."
+            if (speedMin == null || speedMin <= 0 || speedMax == null || speedMax < speedMin ||
+                stride == null || stride <= 0
+            ) {
+                statusText.text = "Enter positive min/max speeds (max >= min) and stride."
                 return@setOnClickListener
             }
             updateRouteSummary()
@@ -177,8 +212,10 @@ class MainActivity : AppCompatActivity() {
                     action = MockLocationService.ACTION_START_ROUTE
                     putExtra(MockLocationService.EXTRA_ROUTE_LATS, lats)
                     putExtra(MockLocationService.EXTRA_ROUTE_LONS, lons)
-                    putExtra(MockLocationService.EXTRA_SPEED_KMH, speed)
+                    putExtra(MockLocationService.EXTRA_SPEED_MIN_KMH, speedMin)
+                    putExtra(MockLocationService.EXTRA_SPEED_MAX_KMH, speedMax)
                     putExtra(MockLocationService.EXTRA_STRIDE_M, stride)
+                    putExtra(MockLocationService.EXTRA_SEED, routeSeed)
                     putExtra(
                         MockLocationService.EXTRA_WRITE_HEALTH,
                         findViewById<CheckBox>(R.id.writeHealthCheck).isChecked

@@ -106,8 +106,8 @@ run and can't be reused without redrawing/retyping it.
 | Flag | Default | Meaning |
 |---|---|---|
 | `--stride` | `0.78` m | Stride length used to convert distance → step count. |
-| `--speed` | `4.5` km/h | Average walking speed. |
-| `--speed-noise` | `0.6` km/h | Std-dev of per-step speed noise. |
+| `--speed-min` | `3.5` km/h | Slowest pace; speed drifts randomly between min and max. |
+| `--speed-max` | `5.5` km/h | Fastest pace. |
 | `--cadence-min` / `--cadence-max` | `105` / `125` spm | Range of per-step cadence. |
 | `--pause-min` / `--pause-max` | `5` / `15` s | Range of pause duration at route turn points (e.g. crossing a street). |
 | `--seed` | random | Fix for a reproducible simulation. |

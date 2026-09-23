@@ -31,8 +31,8 @@ data class RouteStats(
 
 data class SimParams(
     val strideM: Double = 0.78,
-    val speedKmh: Double = 4.5,
-    val speedNoiseKmh: Double = 0.6,
+    val speedMinKmh: Double = 3.5,
+    val speedMaxKmh: Double = 5.5,
     val cadenceMin: Double = 105.0,
     val cadenceMax: Double = 125.0,
     val pauseMinS: Double = 5.0,
@@ -93,7 +93,7 @@ object Simulator {
             val a = waypoints[i - 1]
             val b = waypoints[i]
             val segLen = haversineM(a.lat, a.lon, b.lat, b.lon)
-            val steps = max(1, (segLen / maxGapM).toInt())
+            val steps = max(1, Math.round(segLen / maxGapM).toInt())
             for (s in 1..steps) {
                 val f = s.toDouble() / steps
                 dense += DensePoint(a.lat + (b.lat - a.lat) * f, a.lon + (b.lon - a.lon) * f, s == steps)
@@ -103,8 +103,8 @@ object Simulator {
     }
 
     /**
-     * Walks along [waypoints], emitting one Fix per simulated footstep. Speed varies
-     * (Gaussian noise), cadence is drawn per step, and turn nodes may get a short pause.
+     * Walks along [waypoints], emitting one Fix per simulated footstep. Speed drifts
+     * smoothly between speedMinKmh and speedMaxKmh, cadence follows it, and turn nodes may get a short pause.
      */
     fun simulateWalk(
         waypoints: List<LatLon>,
@@ -113,7 +113,14 @@ object Simulator {
     ): Pair<List<Fix>, RouteStats> {
         require(waypoints.size >= 2) { "Need at least two waypoints to form a route" }
         val rng = if (seed != null) Random(seed) else Random()
-        val dense = densify(waypoints, max(1.0, params.strideM))
+        val dense = densify(waypoints, max(0.1, params.strideM))
+
+        val minKmh = max(0.5, min(params.speedMinKmh, params.speedMaxKmh))
+        val maxKmh = max(minKmh, params.speedMaxKmh)
+        val speedRange = maxKmh - minKmh
+        var currentKmh = minKmh + rng.nextDouble() * speedRange
+        var targetKmh = currentKmh
+        var stepsToRetarget = 0
 
         val fixes = ArrayList<Fix>()
         var t = 0.0
@@ -132,14 +139,21 @@ object Simulator {
                 continue
             }
 
-            val stepLen = min(params.strideM, segLen)
-            val f = stepLen / segLen
-            val newLat = posLat + (target.lat - posLat) * f
-            val newLon = posLon + (target.lon - posLon) * f
+            // Each dense piece is ~one stride; a separate remainder step would inflate the count.
+            val stepLen = segLen
+            val newLat = target.lat
+            val newLon = target.lon
 
-            val stepSpeedKmh = max(0.5, params.speedKmh + rng.nextGaussian() * params.speedNoiseKmh)
-            val stepSpeedMs = stepSpeedKmh * 1000 / 3600
-            val cadenceSpm = params.cadenceMin + rng.nextDouble() * (params.cadenceMax - params.cadenceMin)
+            // Pace drifts: every so often pick a new target speed in [min, max] and ease toward it.
+            if (--stepsToRetarget <= 0) {
+                targetKmh = minKmh + rng.nextDouble() * speedRange
+                stepsToRetarget = 15 + rng.nextInt(40)
+            }
+            currentKmh += (targetKmh - currentKmh) * 0.08 + rng.nextGaussian() * 0.03 * speedRange
+            currentKmh = currentKmh.coerceIn(minKmh, maxKmh)
+            val stepSpeedMs = currentKmh * 1000 / 3600
+            val paceFrac = if (speedRange > 0) (currentKmh - minKmh) / speedRange else 0.5
+            val cadenceSpm = params.cadenceMin + paceFrac * (params.cadenceMax - params.cadenceMin)
             val cadenceDt = 60.0 / cadenceSpm
             val distDt = stepLen / stepSpeedMs
             val dt = (cadenceDt + distDt) / 2.0
@@ -156,13 +170,11 @@ object Simulator {
             posLat = newLat
             posLon = newLon
 
-            if (f >= 1.0 - 1e-9) {
-                val wasWaypoint = dense[segIdx].isWaypoint
-                segIdx++
-                if (wasWaypoint && rng.nextDouble() < params.pauseProbabilityAtTurn) {
-                    t += params.pauseMinS + rng.nextDouble() * (params.pauseMaxS - params.pauseMinS)
-                    fixes += Fix(posLat, posLon, t, cumulativeM, stepIndex, isPause = true)
-                }
+            val wasWaypoint = dense[segIdx].isWaypoint
+            segIdx++
+            if (wasWaypoint && rng.nextDouble() < params.pauseProbabilityAtTurn) {
+                t += params.pauseMinS + rng.nextDouble() * (params.pauseMaxS - params.pauseMinS)
+                fixes += Fix(posLat, posLon, t, cumulativeM, stepIndex, isPause = true)
             }
         }
 

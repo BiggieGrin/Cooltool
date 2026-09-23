@@ -76,13 +76,22 @@
         android:orientation="horizontal">
 
         <EditText
-            android:id="@+id/speedInput"
+            android:id="@+id/speedMinInput"
             android:layout_width="0dp"
             android:layout_height="wrap_content"
             android:layout_weight="1"
-            android:hint="Speed km/h"
+            android:hint="Min km/h"
             android:inputType="numberDecimal"
-            android:text="4.5" />
+            android:text="3.5" />
+
+        <EditText
+            android:id="@+id/speedMaxInput"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:hint="Max km/h"
+            android:inputType="numberDecimal"
+            android:text="5.5" />
 
         <EditText
             android:id="@+id/strideInput"

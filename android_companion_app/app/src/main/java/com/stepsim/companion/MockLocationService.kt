@@ -16,9 +16,11 @@ import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.health.connect.client.HealthConnectClient
+import androidx.health.connect.client.permission.HealthPermission
 import androidx.health.connect.client.records.DistanceRecord
 import androidx.health.connect.client.records.Record
 import androidx.health.connect.client.records.StepsRecord
+import androidx.health.connect.client.records.metadata.Device
 import androidx.health.connect.client.records.metadata.Metadata
 import androidx.health.connect.client.units.Length
 import kotlinx.coroutines.CoroutineScope
@@ -74,11 +76,15 @@ class MockLocationService : Service() {
         const val ACTION_STOP_ROUTE = "com.stepsim.companion.STOP_ROUTE"
         const val EXTRA_ROUTE_LATS = "route_lats"
         const val EXTRA_ROUTE_LONS = "route_lons"
-        const val EXTRA_SPEED_KMH = "speed_kmh"
+        const val EXTRA_SPEED_MIN_KMH = "speed_min_kmh"
+        const val EXTRA_SPEED_MAX_KMH = "speed_max_kmh"
         const val EXTRA_STRIDE_M = "stride_m"
         const val EXTRA_WRITE_HEALTH = "write_health"
         const val EXTRA_STEPS = "steps"
+        const val EXTRA_TOTAL_STEPS = "total_steps"
+        const val EXTRA_SEED = "seed"
         const val EXTRA_ROUTE_DONE = "route_done"
+        const val EXTRA_HEALTH_STATUS = "health_status"
         private const val HEALTH_BUCKET_SECONDS = 30.0
 
         private val PROVIDERS = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
@@ -93,6 +99,9 @@ class MockLocationService : Service() {
     private var healthReceiverRegistered = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var routeJob: Job? = null
+    // Shown persistently (notification + app) so a Health Connect problem can't be missed.
+    @Volatile private var healthStatus = ""
+    private var healthStepsWritten = 0
     private val healthConnectClient by lazy { HealthConnectClient.getOrCreate(applicationContext) }
 
     private val fixReceiver = object : BroadcastReceiver() {
@@ -175,14 +184,18 @@ class MockLocationService : Service() {
         val route = lats.indices.map { LatLon(lats[it], lons[it]) }
         val defaults = SimParams()
         val params = defaults.copy(
-            speedKmh = intent.getDoubleExtra(EXTRA_SPEED_KMH, defaults.speedKmh),
+            speedMinKmh = intent.getDoubleExtra(EXTRA_SPEED_MIN_KMH, defaults.speedMinKmh),
+            speedMaxKmh = intent.getDoubleExtra(EXTRA_SPEED_MAX_KMH, defaults.speedMaxKmh),
             strideM = intent.getDoubleExtra(EXTRA_STRIDE_M, defaults.strideM),
         )
         val writeHealth = intent.getBooleanExtra(EXTRA_WRITE_HEALTH, false)
+        healthStepsWritten = 0
 
         routeJob?.cancel()
         routeJob = serviceScope.launch {
-            val (fixes, _) = Simulator.simulateWalk(route, params)
+            healthStatus = if (writeHealth) checkHealthAccess() else "Health: OFF (tick 'Write steps to Health Connect')"
+            val (fixes, stats) = Simulator.simulateWalk(route, params, intent.getLongExtra(EXTRA_SEED, 0L))
+            val totalSteps = stats.totalSteps
 
             var prevT = 0.0
             var lastSteps = 0
@@ -210,13 +223,13 @@ class MockLocationService : Service() {
                     prevT = fx.tOffsetS
                     lastSteps = fx.stepIndex
                     lastDist = fx.cumulativeM
-                    pushFix(fx.lat, fx.lon, fx.stepIndex)
+                    pushFix(fx.lat, fx.lon, fx.stepIndex, totalSteps)
                     if ((System.currentTimeMillis() - bucketStartMs) / 1000.0 >= HEALTH_BUCKET_SECONDS) {
                         flushBucket()
                     }
                 }
-                updateNotification("Route complete: $lastSteps steps")
-                sendStatus(fixes.last().lat, fixes.last().lon, lastSteps, done = true)
+                updateNotification("Route complete: $lastSteps/$totalSteps steps. $healthStatus")
+                sendStatus(fixes.last().lat, fixes.last().lon, lastSteps, totalSteps, done = true)
             } finally {
                 withContext(NonCancellable) { flushBucket() }
             }
@@ -289,7 +302,7 @@ class MockLocationService : Service() {
     }
 
     @Synchronized
-    private fun pushFix(lat: Double, lng: Double, steps: Int = -1) {
+    private fun pushFix(lat: Double, lng: Double, steps: Int = -1, totalSteps: Int = -1) {
         fixCount++
         val now = System.currentTimeMillis()
         for (provider in PROVIDERS) {
@@ -314,19 +327,21 @@ class MockLocationService : Service() {
         }
 
         updateNotification(
-            if (steps >= 0) "Walking: $steps steps (fix #$fixCount)" else "Fix #$fixCount: lat=$lat lng=$lng"
+            if (steps >= 0) "Walking: $steps/$totalSteps steps. $healthStatus" else "Fix #$fixCount: lat=$lat lng=$lng"
         )
-        sendStatus(lat, lng, steps)
+        sendStatus(lat, lng, steps, totalSteps)
     }
 
-    private fun sendStatus(lat: Double, lng: Double, steps: Int, done: Boolean = false) {
+    private fun sendStatus(lat: Double, lng: Double, steps: Int, totalSteps: Int, done: Boolean = false) {
         sendBroadcast(Intent(ACTION_STATUS_UPDATE).apply {
             setPackage(packageName)
             putExtra(EXTRA_LAT, lat)
             putExtra(EXTRA_LNG, lng)
             putExtra(EXTRA_COUNT, fixCount)
             putExtra(EXTRA_STEPS, steps)
+            putExtra(EXTRA_TOTAL_STEPS, totalSteps)
             putExtra(EXTRA_ROUTE_DONE, done)
+            putExtra(EXTRA_HEALTH_STATUS, healthStatus)
         })
     }
 
@@ -347,7 +362,7 @@ class MockLocationService : Service() {
                     startZoneOffset = zone.rules.getOffset(start),
                     endTime = end,
                     endZoneOffset = zone.rules.getOffset(end),
-                    metadata = Metadata.manualEntry(),
+                    metadata = Metadata.autoRecorded(Device(type = Device.TYPE_PHONE)),
                 )
             )
             if (distanceM >= 0f) {
@@ -357,13 +372,33 @@ class MockLocationService : Service() {
                     startZoneOffset = zone.rules.getOffset(start),
                     endTime = end,
                     endZoneOffset = zone.rules.getOffset(end),
-                    metadata = Metadata.manualEntry(),
+                    metadata = Metadata.autoRecorded(Device(type = Device.TYPE_PHONE)),
                 )
             }
             healthConnectClient.insertRecords(records)
-            updateNotification("Health: wrote $steps steps ($fixCount fixes so far)")
+            healthStepsWritten += steps
+            healthStatus = "Health: $healthStepsWritten steps written"
         } catch (e: Exception) {
-            updateNotification("Health write failed: ${e.message}")
+            healthStatus = "Health write FAILED: ${e.javaClass.simpleName}: ${e.message}"
+        }
+        updateNotification(healthStatus)
+    }
+
+    /** Returns a status line saying whether Health Connect writes can work right now. */
+    private suspend fun checkHealthAccess(): String {
+        return try {
+            if (HealthConnectClient.getSdkStatus(this) != HealthConnectClient.SDK_AVAILABLE) {
+                return "Health: Health Connect not available/needs update"
+            }
+            val needed = setOf(
+                HealthPermission.getWritePermission(StepsRecord::class),
+                HealthPermission.getWritePermission(DistanceRecord::class),
+            )
+            val granted = healthConnectClient.permissionController.getGrantedPermissions()
+            if (granted.containsAll(needed)) "Health: ready, writes every ${HEALTH_BUCKET_SECONDS.toInt()}s"
+            else "Health: permission NOT granted (tap 'Grant Health Connect access')"
+        } catch (e: Exception) {
+            "Health: check failed: ${e.javaClass.simpleName}: ${e.message}"
         }
     }
 

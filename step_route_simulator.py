@@ -48,8 +48,8 @@ from typing import List, Optional, Tuple
 
 EARTH_RADIUS_M = 6371000.0
 DEFAULT_STRIDE_M = 0.78
-DEFAULT_SPEED_KMH = 4.5
-DEFAULT_SPEED_NOISE_KMH = 0.6
+DEFAULT_SPEED_MIN_KMH = 3.5
+DEFAULT_SPEED_MAX_KMH = 5.5
 DEFAULT_CADENCE_MIN = 105
 DEFAULT_CADENCE_MAX = 125
 DEFAULT_PAUSE_MIN_S = 5.0
@@ -181,8 +181,11 @@ ROUTE_BUILDER_HTML = """<!DOCTYPE html>
   <h2>Step Route Builder</h2>
   <div>Click the map to add waypoints. Click "Undo" to remove the last point.</div>
 
-  <label>Walking speed: <span class="val" id="speedVal">4.5</span> km/h
-    <input type="range" id="speed" min="2" max="8" step="0.1" value="4.5">
+  <label>Min speed: <span class="val" id="speedMinVal">3.5</span> km/h
+    <input type="range" id="speedMin" min="2" max="8" step="0.1" value="3.5">
+  </label>
+  <label>Max speed: <span class="val" id="speedMaxVal">5.5</span> km/h
+    <input type="range" id="speedMax" min="2" max="8" step="0.1" value="5.5">
   </label>
   <label>Stride length: <span class="val" id="strideVal">0.78</span> m
     <input type="range" id="stride" min="0.5" max="1.1" step="0.01" value="0.78">
@@ -228,7 +231,8 @@ ROUTE_BUILDER_HTML = """<!DOCTYPE html>
     var dist = 0;
     for (var i = 1; i < points.length; i++) dist += haversine(points[i-1], points[i]);
     var stride = parseFloat(document.getElementById('stride').value);
-    var speed = parseFloat(document.getElementById('speed').value);
+    var speed = (parseFloat(document.getElementById('speedMin').value) +
+                 parseFloat(document.getElementById('speedMax').value)) / 2;
     var steps = Math.round(dist / stride);
     var hours = (dist / 1000) / speed;
     var mins = Math.round(hours * 60);
@@ -248,9 +252,11 @@ ROUTE_BUILDER_HTML = """<!DOCTYPE html>
     refreshStats();
   });
 
-  document.getElementById('speed').addEventListener('input', function() {
-    document.getElementById('speedVal').textContent = this.value;
-    refreshStats();
+  ['speedMin', 'speedMax'].forEach(function(id) {
+    document.getElementById(id).addEventListener('input', function() {
+      document.getElementById(id + 'Val').textContent = this.value;
+      refreshStats();
+    });
   });
   document.getElementById('stride').addEventListener('input', function() {
     document.getElementById('strideVal').textContent = this.value;
@@ -280,7 +286,8 @@ ROUTE_BUILDER_HTML = """<!DOCTYPE html>
     }
     var payload = {
       waypoints: points,
-      speed_kmh: parseFloat(document.getElementById('speed').value),
+      speed_min_kmh: parseFloat(document.getElementById('speedMin').value),
+      speed_max_kmh: parseFloat(document.getElementById('speedMax').value),
       stride_m: parseFloat(document.getElementById('stride').value)
     };
     document.getElementById('status').textContent = 'Sending route to CLI...';
@@ -407,7 +414,7 @@ def densify_route(waypoints: List[Tuple[float, float]], max_gap_m: float = 5.0) 
         lat1, lon1 = waypoints[i - 1]
         lat2, lon2 = waypoints[i]
         seg_len = haversine_m(lat1, lon1, lat2, lon2)
-        steps = max(1, int(seg_len // max_gap_m))
+        steps = max(1, round(seg_len / max_gap_m))
         for s in range(1, steps + 1):
             f = s / steps
             lat, lon = interpolate_point(lat1, lon1, lat2, lon2, f)
@@ -418,8 +425,8 @@ def densify_route(waypoints: List[Tuple[float, float]], max_gap_m: float = 5.0) 
 def simulate_walk(
     waypoints: List[Tuple[float, float]],
     stride_m: float = DEFAULT_STRIDE_M,
-    speed_kmh: float = DEFAULT_SPEED_KMH,
-    speed_noise_kmh: float = DEFAULT_SPEED_NOISE_KMH,
+    speed_min_kmh: float = DEFAULT_SPEED_MIN_KMH,
+    speed_max_kmh: float = DEFAULT_SPEED_MAX_KMH,
     cadence_min: float = DEFAULT_CADENCE_MIN,
     cadence_max: float = DEFAULT_CADENCE_MAX,
     pause_min_s: float = DEFAULT_PAUSE_MIN_S,
@@ -430,12 +437,18 @@ def simulate_walk(
 ) -> Tuple[List[Fix], RouteStats]:
     """Walk along `waypoints`, emitting one Fix per simulated footstep.
 
-    Speed varies around `speed_kmh` (Gaussian noise), cadence is drawn per-step
-    from [cadence_min, cadence_max] spm, and turn nodes have a chance of a
-    short pause to emulate waiting to cross a street.
+    Pace drifts smoothly between `speed_min_kmh` and `speed_max_kmh`, cadence
+    follows it within [cadence_min, cadence_max] spm, and turn nodes have a
+    chance of a short pause to emulate waiting to cross a street.
     """
     rng = random.Random(seed)
-    dense_points = densify_route(waypoints, max_gap_m=max(1.0, stride_m))
+    min_kmh = max(0.5, min(speed_min_kmh, speed_max_kmh))
+    max_kmh = max(min_kmh, speed_max_kmh)
+    speed_range = max_kmh - min_kmh
+    current_kmh = rng.uniform(min_kmh, max_kmh)
+    target_kmh = current_kmh
+    steps_to_retarget = 0
+    dense_points = densify_route(waypoints, max_gap_m=max(0.1, stride_m))
 
     total_distance_m = sum(
         haversine_m(dense_points[i - 1][0], dense_points[i - 1][1], dense_points[i][0], dense_points[i][1])
@@ -461,14 +474,21 @@ def simulate_walk(
             seg_idx += 1
             continue
 
-        step_len = min(stride_m, seg_len)
+        step_len = seg_len  # each dense piece is ~one stride; a separate remainder step would inflate the count
         f = step_len / seg_len
         new_lat, new_lon = interpolate_point(pos[0], pos[1], target[0], target[1], f)
 
         # Humanized pace for this step.
-        step_speed_kmh = max(0.5, rng.gauss(speed_kmh, speed_noise_kmh))
-        step_speed_ms = step_speed_kmh * 1000 / 3600
-        cadence_spm = rng.uniform(cadence_min, cadence_max)
+        # Every so often pick a new target speed in [min, max] and ease toward it.
+        steps_to_retarget -= 1
+        if steps_to_retarget <= 0:
+            target_kmh = rng.uniform(min_kmh, max_kmh)
+            steps_to_retarget = rng.randint(15, 54)
+        current_kmh += (target_kmh - current_kmh) * 0.08 + rng.gauss(0, 0.03 * speed_range)
+        current_kmh = min(max_kmh, max(min_kmh, current_kmh))
+        step_speed_ms = current_kmh * 1000 / 3600
+        pace_frac = (current_kmh - min_kmh) / speed_range if speed_range > 0 else 0.5
+        cadence_spm = cadence_min + pace_frac * (cadence_max - cadence_min)
         cadence_dt = 60.0 / cadence_spm
         # Blend cadence-implied and speed-implied timing so both constraints
         # are respected on average.
@@ -771,10 +791,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     motion = p.add_argument_group("Motion / cadence tuning")
     motion.add_argument("--stride", type=float, default=DEFAULT_STRIDE_M,
                          help="Stride length in meters.")
-    motion.add_argument("--speed", type=float, default=DEFAULT_SPEED_KMH,
-                         help="Average walking speed in km/h.")
-    motion.add_argument("--speed-noise", type=float, default=DEFAULT_SPEED_NOISE_KMH,
-                         help="Std-dev of walking speed noise in km/h.")
+    motion.add_argument("--speed-min", type=float, default=DEFAULT_SPEED_MIN_KMH,
+                         help="Slowest walking speed in km/h (pace drifts between min and max).")
+    motion.add_argument("--speed-max", type=float, default=DEFAULT_SPEED_MAX_KMH,
+                         help="Fastest walking speed in km/h.")
     motion.add_argument("--cadence-min", type=float, default=DEFAULT_CADENCE_MIN,
                          help="Minimum step cadence, steps/min.")
     motion.add_argument("--cadence-max", type=float, default=DEFAULT_CADENCE_MAX,
@@ -823,8 +843,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     return p
 
 
-def resolve_waypoints(args: argparse.Namespace) -> Tuple[List[Tuple[float, float]], float, float]:
-    """Returns (waypoints, speed_kmh, stride_m), pulling overrides from the map UI if used."""
+def resolve_waypoints(args: argparse.Namespace) -> Tuple[List[Tuple[float, float]], float, float, float]:
+    """Returns (waypoints, speed_min_kmh, speed_max_kmh, stride_m), pulling overrides from the map UI if used."""
     sources = [bool(args.gpx), bool(args.waypoints), bool(args.draw_map)]
     if sum(sources) == 0:
         print("ERROR: provide one of --gpx, --waypoints, or --draw-map.", file=sys.stderr)
@@ -833,7 +853,8 @@ def resolve_waypoints(args: argparse.Namespace) -> Tuple[List[Tuple[float, float
         print("ERROR: --gpx, --waypoints, and --draw-map are mutually exclusive.", file=sys.stderr)
         sys.exit(2)
 
-    speed_kmh = args.speed
+    speed_min_kmh = args.speed_min
+    speed_max_kmh = args.speed_max
     stride_m = args.stride
 
     if args.gpx:
@@ -847,12 +868,13 @@ def resolve_waypoints(args: argparse.Namespace) -> Tuple[List[Tuple[float, float
         if len(waypoints) < 2:
             print("ERROR: drawn route needs at least 2 waypoints.", file=sys.stderr)
             sys.exit(2)
-        speed_kmh = float(result.get("speed_kmh", speed_kmh))
+        speed_min_kmh = float(result.get("speed_min_kmh", speed_min_kmh))
+        speed_max_kmh = float(result.get("speed_max_kmh", speed_max_kmh))
         stride_m = float(result.get("stride_m", stride_m))
         print(f"[draw-map] Received {len(waypoints)} waypoints "
-              f"(speed={speed_kmh} km/h, stride={stride_m} m).")
+              f"(speed={speed_min_kmh}-{speed_max_kmh} km/h, stride={stride_m} m).")
 
-    return waypoints, speed_kmh, stride_m
+    return waypoints, speed_min_kmh, speed_max_kmh, stride_m
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -867,7 +889,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         print("ERROR: --write-health requires --live --method broadcast.", file=sys.stderr)
         sys.exit(2)
 
-    waypoints, speed_kmh, stride_m = resolve_waypoints(args)
+    waypoints, speed_min_kmh, speed_max_kmh, stride_m = resolve_waypoints(args)
 
     if args.save_route:
         write_gpx(args.save_route, waypoints)
@@ -876,8 +898,8 @@ def main(argv: Optional[List[str]] = None) -> None:
     fixes, stats = simulate_walk(
         waypoints,
         stride_m=stride_m,
-        speed_kmh=speed_kmh,
-        speed_noise_kmh=args.speed_noise,
+        speed_min_kmh=speed_min_kmh,
+        speed_max_kmh=speed_max_kmh,
         cadence_min=args.cadence_min,
         cadence_max=args.cadence_max,
         pause_min_s=args.pause_min,
